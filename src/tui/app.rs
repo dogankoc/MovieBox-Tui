@@ -3,7 +3,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::subtitles::{
-    OpenSubtitlesClient, SubtitleQuery, has_turkish, moviebox_subtitles, options_with_none,
+    OpenSubtitlesClient, SubtitleQuery, cached_turkish, has_turkish, moviebox_subtitles,
+    options_with_none, subdl::SubDlClient,
 };
 use crate::tui::{
     action::Action,
@@ -998,13 +999,59 @@ impl App {
                         let mut subtitles = moviebox_subtitles(&native_payload);
 
                         if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
+                            if let Some(subtitle) = cached_turkish(&subtitle_query) {
+                                subtitles.insert(0, subtitle);
+                                sender.send(Action::Log(
+                                    "Turkish subtitle loaded from local cache.".to_string(),
+                                )).ok();
+                            }
+                        }
+
+                        if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
+                            match SubDlClient::from_config() {
+                                Ok(Some(subdl)) => {
+                                    match subdl.find_turkish(&subtitle_query).await {
+                                        Ok(Some(subtitle)) => {
+                                            subtitles.insert(0, subtitle);
+                                            sender.send(Action::Log(
+                                                "Turkish subtitle found via SubDL and cached."
+                                                    .to_string(),
+                                            )).ok();
+                                        }
+                                        Ok(None) => {
+                                            sender.send(Action::Log(
+                                                "No Turkish subtitle found via SubDL.".to_string(),
+                                            )).ok();
+                                        }
+                                        Err(error) => {
+                                            sender.send(Action::Log(format!(
+                                                "SubDL lookup failed: {error}"
+                                            ))).ok();
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    sender.send(Action::Log(
+                                        "Set SUBDL_API_KEY to enable the high-quota Turkish subtitle provider."
+                                            .to_string(),
+                                    )).ok();
+                                }
+                                Err(error) => {
+                                    sender.send(Action::Log(format!(
+                                        "SubDL configuration failed: {error}"
+                                    ))).ok();
+                                }
+                            }
+                        }
+
+                        if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
                             match OpenSubtitlesClient::from_config() {
                                 Ok(Some(opensubtitles)) => {
                                     match opensubtitles.find_turkish(&subtitle_query).await {
                                         Ok(Some(subtitle)) => {
                                             subtitles.insert(0, subtitle);
                                             sender.send(Action::Log(
-                                                "Turkish subtitle found via OpenSubtitles."
+                                                "Turkish subtitle found via OpenSubtitles and cached."
                                                     .to_string(),
                                             )).ok();
                                         }

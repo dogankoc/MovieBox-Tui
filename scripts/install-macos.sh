@@ -74,9 +74,22 @@ case ":$PATH:" in
 esac
 
 config_root="${XDG_CONFIG_HOME:-$HOME/.config}/moviebox-tui"
+subdl_key_file="$config_root/subdl_api_key"
+if [[ -z "${SUBDL_API_KEY:-}" && ! -s "$subdl_key_file" && -t 0 ]]; then
+  printf 'SubDL API key (recommended; press Enter to skip): '
+  IFS= read -rs subdl_key
+  printf '\n'
+  if [[ -n "$subdl_key" ]]; then
+    umask 077
+    mkdir -p "$config_root"
+    printf '%s\n' "$subdl_key" >"$subdl_key_file"
+    echo "Saved SubDL API key to $subdl_key_file"
+  fi
+fi
+
 key_file="$config_root/opensubtitles_api_key"
 if [[ -z "${OPENSUBTITLES_API_KEY:-}" && ! -s "$key_file" && -t 0 ]]; then
-  printf 'OpenSubtitles API key (press Enter to skip): '
+  printf 'OpenSubtitles API key (optional fallback; press Enter to skip): '
   IFS= read -rs opensubtitles_key
   printf '\n'
   if [[ -n "$opensubtitles_key" ]]; then

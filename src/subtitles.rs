@@ -1,6 +1,9 @@
+use md5::{Digest, Md5};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::{Value, json};
 use std::{collections::HashSet, path::PathBuf, time::Duration};
+
+pub mod subdl;
 
 const API_BASE_URL: &str = "https://api.opensubtitles.com/api/v1";
 const API_KEY_ENV: &str = "OPENSUBTITLES_API_KEY";
@@ -28,6 +31,8 @@ pub enum OpenSubtitlesError {
     Request(#[from] reqwest::Error),
     #[error("OpenSubtitles response did not contain a download link")]
     MissingDownloadLink,
+    #[error("could not cache subtitle: {0}")]
+    Cache(#[from] std::io::Error),
 }
 
 #[derive(Clone)]
@@ -104,10 +109,20 @@ impl OpenSubtitlesClient {
             .await?;
 
         let url = download_link(&response).ok_or(OpenSubtitlesError::MissingDownloadLink)?;
-        Ok(Some(SubtitleOption {
-            name: "Türkçe (OpenSubtitles)".to_string(),
-            url: url.to_string(),
-        }))
+        let contents = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        Ok(Some(cache_subtitle(
+            query,
+            "srt",
+            &contents,
+            "Türkçe (OpenSubtitles)",
+        )?))
     }
 
     fn headers(&self, json_body: bool) -> Result<HeaderMap, OpenSubtitlesError> {
@@ -183,6 +198,71 @@ pub fn is_turkish_label(label: &str) -> bool {
     matches!(normalized.as_str(), "tr" | "tur")
         || normalized.contains("turkish")
         || normalized.contains("türkçe")
+}
+
+pub fn cached_turkish(query: &SubtitleQuery) -> Option<SubtitleOption> {
+    let directory = subtitle_cache_dir()?;
+    ["srt", "vtt", "ass"]
+        .into_iter()
+        .map(|extension| directory.join(format!("{}.{}", cache_key(query), extension)))
+        .find(|path| path.is_file())
+        .map(|path| SubtitleOption {
+            name: "Türkçe (önbellek)".to_string(),
+            url: path.to_string_lossy().into_owned(),
+        })
+}
+
+pub(crate) fn cache_subtitle(
+    query: &SubtitleQuery,
+    extension: &str,
+    contents: &[u8],
+    name: &str,
+) -> Result<SubtitleOption, std::io::Error> {
+    let directory = subtitle_cache_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cache directory is unavailable",
+        )
+    })?;
+    std::fs::create_dir_all(&directory)?;
+    let extension = match extension.to_ascii_lowercase().as_str() {
+        "vtt" => "vtt",
+        "ass" | "ssa" => "ass",
+        _ => "srt",
+    };
+    let path = directory.join(format!("{}.{}", cache_key(query), extension));
+    std::fs::write(&path, contents)?;
+    Ok(SubtitleOption {
+        name: name.to_string(),
+        url: path.to_string_lossy().into_owned(),
+    })
+}
+
+fn subtitle_cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|path| path.join("moviebox-tui/subtitles"))
+}
+
+fn cache_key(query: &SubtitleQuery) -> String {
+    let identity = format!(
+        "{}|{}|{}|{}",
+        query.title.trim().to_lowercase(),
+        query
+            .year
+            .map_or_else(String::new, |value| value.to_string()),
+        query
+            .season
+            .map_or_else(String::new, |value| value.to_string()),
+        query
+            .episode
+            .map_or_else(String::new, |value| value.to_string())
+    );
+    let mut hasher = Md5::new();
+    hasher.update(identity.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn load_api_key() -> Option<String> {
@@ -304,5 +384,29 @@ mod tests {
                 "/Users/example/.config/moviebox-tui/opensubtitles_api_key"
             ))
         );
+    }
+
+    #[test]
+    fn cache_key_is_stable_and_episode_specific() {
+        let movie = SubtitleQuery {
+            title: "  Backrooms ".to_string(),
+            year: Some(2026),
+            season: None,
+            episode: None,
+        };
+        let same_movie = SubtitleQuery {
+            title: "backrooms".to_string(),
+            year: Some(2026),
+            season: None,
+            episode: None,
+        };
+        let episode = SubtitleQuery {
+            season: Some(1),
+            episode: Some(1),
+            ..same_movie.clone()
+        };
+
+        assert_eq!(cache_key(&movie), cache_key(&same_movie));
+        assert_ne!(cache_key(&movie), cache_key(&episode));
     }
 }
