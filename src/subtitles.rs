@@ -1,6 +1,6 @@
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::{Value, json};
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 const API_BASE_URL: &str = "https://api.opensubtitles.com/api/v1";
 const API_KEY_ENV: &str = "OPENSUBTITLES_API_KEY";
@@ -193,11 +193,23 @@ fn load_api_key() -> Option<String> {
         return Some(value.trim().to_string());
     }
 
-    let path = dirs::config_dir()?.join("moviebox-tui/opensubtitles_api_key");
+    let path = config_key_path()?;
     std::fs::read_to_string(path)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn config_key_path() -> Option<PathBuf> {
+    let config_root = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    config_key_path_from(config_root, dirs::home_dir())
+}
+
+fn config_key_path_from(config_root: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let config_root = config_root.or_else(|| home.map(|path| path.join(".config")))?;
+    Some(config_root.join("moviebox-tui/opensubtitles_api_key"))
 }
 
 fn first_file_id(payload: &Value) -> Option<i64> {
@@ -280,6 +292,17 @@ mod tests {
         assert_eq!(
             download_link(&download),
             Some("https://example.com/subtitle.srt")
+        );
+    }
+
+    #[test]
+    fn uses_the_same_config_path_as_the_installer() {
+        let path = config_key_path_from(None, Some(PathBuf::from("/Users/example")));
+        assert_eq!(
+            path,
+            Some(PathBuf::from(
+                "/Users/example/.config/moviebox-tui/opensubtitles_api_key"
+            ))
         );
     }
 }
