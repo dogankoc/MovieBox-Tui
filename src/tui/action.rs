@@ -23,7 +23,7 @@ pub enum Action {
     PreviewFailure(String),
     CopyLink,
     PlayStream,
-    ShowSubtitlePopup(String, serde_json::Value),
+    ShowSubtitlePopup(String, Vec<(String, String)>),
     LaunchMpv(String, Option<String>),
     DownloadStream,
     UpdateDownload(Option<f64>, Option<String>),

@@ -4,18 +4,53 @@ A lightning fast, zero-config terminal user interface (TUI) for streaming movies
 
 ## Installation
 
+### macOS (recommended)
+
+The installer checks and installs `pkgconf`, `chafa`, and `mpv`, builds the app,
+and makes sure Cargo's binary directory is available in your shell:
+
 ```sh
-cargo install moviebox-tui
+./scripts/install-macos.sh
 ```
 
-*Note: Requires `mpv` installed on your system for video playback.*
+This avoids the `Failed to find chafa via pkg-config` build error seen when
+`ratatui-image` is compiled without the native Chafa library.
+
+### Manual
+
+```sh
+brew install pkgconf chafa mpv
+cargo install --path . --locked
+```
+
+Requires Rust 1.90 or newer. Other platforms must provide `pkg-config`, Chafa
+1.8 or newer, and `mpv` through their system package manager.
+
+## Turkish subtitles
+
+MovieBox subtitles are checked first. Turkish captions (`Türkçe`, `Turkish`,
+`tr`, or `tur`) are moved to the top and selected by default. If MovieBox does
+not provide Turkish subtitles, the app searches OpenSubtitles for the selected
+movie or episode.
+
+The OpenSubtitles REST API requires an API key. Create one in your
+[OpenSubtitles consumer account](https://www.opensubtitles.com/en/consumers),
+then either run the macOS installer and paste the key when prompted, or set:
+
+```sh
+export OPENSUBTITLES_API_KEY="your-api-key"
+```
+
+The installer stores a provided key at
+`~/.config/moviebox-tui/opensubtitles_api_key` with user-only permissions. API
+keys are never committed to the repository.
 
 ## Usage
 
 Launch the app from your terminal:
 
 ```sh
-moviebox-tui
+moviebox
 ```
 
 - **Search**: Press `/` to search for movies or shows.
@@ -27,6 +62,7 @@ moviebox-tui
 
 - Instant streaming with `mpv`
 - Full metadata (seasons, episodes, dubs, and subs)
+- Turkish subtitles preferred automatically, with OpenSubtitles fallback
 - Built in geo-unblocking (zero VPN required)
 - Copy direct stream URLs to clipboard
 
