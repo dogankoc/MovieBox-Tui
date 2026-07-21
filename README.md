@@ -14,7 +14,9 @@ and makes sure Cargo's binary directory is available in your shell:
 ```
 
 This avoids the `Failed to find chafa via pkg-config` build error seen when
-`ratatui-image` is compiled without the native Chafa library.
+`ratatui-image` is compiled without the native Chafa library. It also redirects
+the old `moviebox-tui` executable name to `moviebox`, so stale shell aliases use
+the updated application.
 
 ### Manual
 

@@ -56,6 +56,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cargo install --path "$repo_root" --locked --force
 
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+legacy_binary="$cargo_bin/moviebox-tui"
+if [[ -e "$legacy_binary" && ! -L "$legacy_binary" ]]; then
+  legacy_backup="$legacy_binary.legacy"
+  if [[ ! -e "$legacy_backup" ]]; then
+    mv "$legacy_binary" "$legacy_backup"
+    echo "Backed up the old moviebox-tui binary to $legacy_backup"
+  fi
+fi
+ln -sfn "$cargo_bin/moviebox" "$legacy_binary"
+
 case ":$PATH:" in
   *":$cargo_bin:"*) ;;
   *)
