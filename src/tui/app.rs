@@ -2,6 +2,10 @@ use ratatui::{DefaultTerminal, Frame};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use crate::subtitles::{
+    OpenSubtitlesClient, SubtitleQuery, cached_turkish, has_turkish, moviebox_subtitles,
+    options_with_none, subdl::SubDlClient,
+};
 use crate::tui::{
     action::Action,
     event::EventHandler,
@@ -960,32 +964,132 @@ impl App {
                         .unwrap_or("")
                         .to_string();
                     let resource_id = self.get_selected_resource_id().unwrap_or("".to_string());
+                    let details = self.state.selected_details.as_ref();
+                    let title = details
+                        .and_then(|value| value.get("title"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let year = details
+                        .and_then(|value| value.get("releaseDate"))
+                        .and_then(|value| value.as_str())
+                        .and_then(|value| value.get(..4))
+                        .and_then(|value| value.parse::<u16>().ok());
+                    let is_series = details
+                        .and_then(|value| {
+                            value.get("subjectType").or_else(|| value.get("stype"))
+                        })
+                        .and_then(|value| value.as_i64())
+                        == Some(2);
+                    let subtitle_query = SubtitleQuery {
+                        title,
+                        year,
+                        season: is_series.then_some(self.state.selected_season),
+                        episode: is_series.then_some(self.state.selected_episode),
+                    };
 
                     let client = self.client.clone();
                     let sender = self.action_sender.clone();
                     let link_clone = link.clone();
                     tokio::spawn(async move {
-                        if let Ok(res) = client.get_ext_captions(&subject_id, &resource_id).await {
-                            sender.send(Action::ShowSubtitlePopup(link_clone, res)).ok();
-                        } else {
-                            sender.send(Action::LaunchMpv(link_clone, None)).ok();
+                        let native_payload = client
+                            .get_ext_captions(&subject_id, &resource_id)
+                            .await
+                            .unwrap_or_else(|_| serde_json::json!({ "extCaptions": [] }));
+                        let mut subtitles = moviebox_subtitles(&native_payload);
+
+                        if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
+                            if let Some(subtitle) = cached_turkish(&subtitle_query) {
+                                subtitles.insert(0, subtitle);
+                                sender.send(Action::Log(
+                                    "Turkish subtitle loaded from local cache.".to_string(),
+                                )).ok();
+                            }
                         }
+
+                        if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
+                            match SubDlClient::from_config() {
+                                Ok(Some(subdl)) => {
+                                    match subdl.find_turkish(&subtitle_query).await {
+                                        Ok(Some(subtitle)) => {
+                                            subtitles.insert(0, subtitle);
+                                            sender.send(Action::Log(
+                                                "Turkish subtitle found via SubDL and cached."
+                                                    .to_string(),
+                                            )).ok();
+                                        }
+                                        Ok(None) => {
+                                            sender.send(Action::Log(
+                                                "No Turkish subtitle found via SubDL.".to_string(),
+                                            )).ok();
+                                        }
+                                        Err(error) => {
+                                            sender.send(Action::Log(format!(
+                                                "SubDL lookup failed: {error}"
+                                            ))).ok();
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    sender.send(Action::Log(
+                                        "Set SUBDL_API_KEY to enable the high-quota Turkish subtitle provider."
+                                            .to_string(),
+                                    )).ok();
+                                }
+                                Err(error) => {
+                                    sender.send(Action::Log(format!(
+                                        "SubDL configuration failed: {error}"
+                                    ))).ok();
+                                }
+                            }
+                        }
+
+                        if !has_turkish(&subtitles) && !subtitle_query.title.is_empty() {
+                            match OpenSubtitlesClient::from_config() {
+                                Ok(Some(opensubtitles)) => {
+                                    match opensubtitles.find_turkish(&subtitle_query).await {
+                                        Ok(Some(subtitle)) => {
+                                            subtitles.insert(0, subtitle);
+                                            sender.send(Action::Log(
+                                                "Turkish subtitle found via OpenSubtitles and cached."
+                                                    .to_string(),
+                                            )).ok();
+                                        }
+                                        Ok(None) => {
+                                            sender.send(Action::Log(
+                                                "No Turkish subtitle found via OpenSubtitles."
+                                                    .to_string(),
+                                            )).ok();
+                                        }
+                                        Err(error) => {
+                                            sender.send(Action::Log(format!(
+                                                "OpenSubtitles lookup failed: {error}"
+                                            ))).ok();
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    sender.send(Action::Log(
+                                        "Set OPENSUBTITLES_API_KEY to enable Turkish subtitle fallback."
+                                            .to_string(),
+                                    )).ok();
+                                }
+                                Err(error) => {
+                                    sender.send(Action::Log(format!(
+                                        "OpenSubtitles configuration failed: {error}"
+                                    ))).ok();
+                                }
+                            }
+                        }
+
+                        sender.send(Action::ShowSubtitlePopup(
+                            link_clone,
+                            options_with_none(subtitles),
+                        )).ok();
                     });
                 }
             }
-            Action::ShowSubtitlePopup(link, ext_captions) => {
-                let mut options = vec![("None".to_string(), "".to_string())];
-                
-                if let Some(captions_list) = ext_captions.get("extCaptions").and_then(|c| c.as_array()) {
-                    for cap in captions_list {
-                        let name = cap.get("lanName").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                        let url = cap.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
-                        if !url.is_empty() {
-                            options.push((name, url));
-                        }
-                    }
-                }
-
+            Action::ShowSubtitlePopup(link, options) => {
                 if options.len() > 1 {
                     self.state.subtitle_popup = true;
                     self.state.subtitle_list = options;
